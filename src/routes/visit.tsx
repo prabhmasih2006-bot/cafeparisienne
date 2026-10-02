@@ -341,7 +341,7 @@ function VisitPage() {
                     {submitted && (
                       <span className="inline-flex items-center gap-2 text-xs sm:text-sm font-medium text-emerald-800 bg-emerald-100 border border-emerald-300 px-4 py-2 rounded-full animate-in fade-in slide-in-from-bottom-2 duration-300">
                         <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                        Thank you! Your message has been saved and sent to Admin.
+                        Thank you! Your message has been received. Our team will get back to you shortly.
                       </span>
                     )}
                   </div>

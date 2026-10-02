@@ -39,6 +39,7 @@ import {
   isAdminAuthenticated,
   adminLogin,
   adminLogout,
+  getAdminLockoutStatus,
   getFormSubmissions,
   updateSubmissionStatus,
   deleteFormSubmission,
@@ -60,7 +61,6 @@ import {
   type WhatsAppClick,
   type PageViewStats,
   DEFAULT_ADMIN_USERNAME,
-  DEFAULT_ADMIN_PASSWORD,
 } from "@/lib/admin-store";
 import { getStoredOrders, type CafeOrder, type OrderStatus } from "@/components/order-system";
 import { cafeName, address } from "@/lib/naji-data";
@@ -87,6 +87,7 @@ function AdminPage() {
   const [loginPassword, setLoginPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState("");
+  const [lockoutRemaining, setLockoutRemaining] = useState(0);
 
   // Live data states
   const [orders, setOrders] = useState<CafeOrder[]>([]);
@@ -103,10 +104,13 @@ function AdminPage() {
   const [formSearch, setFormSearch] = useState("");
 
   // Settings form state
+  const [currentPasswordInput, setCurrentPasswordInput] = useState("");
   const [newUsername, setNewUsername] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [settingsNotice, setSettingsNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [showCurrentPass, setShowCurrentPass] = useState(false);
+  const [showNewPass, setShowNewPass] = useState(false);
 
   // Load and sync data
   const refreshAllData = () => {
@@ -125,6 +129,12 @@ function AdminPage() {
       localStorage.setItem("cafe_cleaned_fresh_v3", "true");
     }
     refreshAllData();
+
+    // Check existing lockout status
+    const status = getAdminLockoutStatus();
+    if (status.isLocked) {
+      setLockoutRemaining(status.remainingSeconds);
+    }
 
     // Clock ticker
     const timer = setInterval(() => {
@@ -151,9 +161,26 @@ function AdminPage() {
     };
   }, []);
 
+  // Lockout countdown ticker
+  useEffect(() => {
+    if (lockoutRemaining <= 0) return;
+    const interval = setInterval(() => {
+      setLockoutRemaining((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          setLoginError("");
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [lockoutRemaining]);
+
   // Handle Login
   const handleLoginSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (lockoutRemaining > 0) return;
     setLoginError("");
 
     const res = adminLogin(loginUsername, loginPassword);
@@ -163,15 +190,10 @@ function AdminPage() {
       setLoginPassword("");
     } else {
       setLoginError(res.message);
+      if (res.remainingSeconds) {
+        setLockoutRemaining(res.remainingSeconds);
+      }
     }
-  };
-
-  // Quick Autofill for convenience
-  const handleAutofillDefault = () => {
-    const creds = getAdminCredentials();
-    setLoginUsername(creds.username);
-    setLoginPassword(creds.password);
-    setLoginError("");
   };
 
   // Handle Logout
@@ -180,24 +202,49 @@ function AdminPage() {
     setIsAuthenticated(false);
   };
 
-  // Handle Settings Update (Custom Username and Password)
+  // Handle Settings Update (Custom Username and Password with verification)
   const handleUpdateSettings = (e: React.FormEvent) => {
     e.preventDefault();
     setSettingsNotice(null);
 
-    if (newPassword && newPassword !== confirmPassword) {
-      setSettingsNotice({ type: "error", text: "New passwords do not match." });
+    const currentCreds = getAdminCredentials();
+    if (!currentPasswordInput) {
+      setSettingsNotice({
+        type: "error",
+        text: "Please enter your current password to authorize credentials update.",
+      });
+      return;
+    }
+    if (currentPasswordInput !== currentCreds.password) {
+      setSettingsNotice({
+        type: "error",
+        text: "Current password does not match. Please verify your current password.",
+      });
       return;
     }
 
-    const currentCreds = getAdminCredentials();
+    if (newPassword) {
+      if (newPassword.length < 8) {
+        setSettingsNotice({
+          type: "error",
+          text: "New password must be at least 8 characters long for strong protection.",
+        });
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        setSettingsNotice({ type: "error", text: "New passwords do not match." });
+        return;
+      }
+    }
+
     const finalUser = newUsername.trim() || currentCreds.username;
     const finalPass = newPassword.trim() || currentCreds.password;
 
-    const res = updateAdminCredentials(finalUser, finalPass);
+    const res = updateAdminCredentials(finalUser, finalPass, currentPasswordInput);
     if (res.success) {
       setSettingsNotice({ type: "success", text: res.message });
       setCurrentAdmin(finalUser);
+      setCurrentPasswordInput("");
       setNewPassword("");
       setConfirmPassword("");
     } else {
@@ -395,7 +442,7 @@ function AdminPage() {
               </div>
             )}
 
-            <form onSubmit={handleLoginSubmit} className="mt-6 space-y-4 relative z-10">
+            <form onSubmit={handleLoginSubmit} autoComplete="off" className="mt-6 space-y-4 relative z-10">
               <div>
                 <label className="block text-xs font-semibold text-white/70 uppercase tracking-wider mb-1.5">
                   Admin Username
@@ -405,9 +452,15 @@ function AdminPage() {
                   <input
                     type="text"
                     required
+                    name="admin_user_secure_field"
+                    id="admin_user_secure_field"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="none"
+                    spellCheck="false"
                     value={loginUsername}
                     onChange={(e) => setLoginUsername(e.target.value)}
-                    placeholder="e.g. admin_parisienne"
+                    placeholder="Enter admin username"
                     className="w-full rounded-xl bg-white/[0.05] border border-white/15 pl-10 pr-4 py-3 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-sand focus:bg-white/[0.08] transition-all"
                   />
                 </div>
@@ -422,6 +475,12 @@ function AdminPage() {
                   <input
                     type={showPassword ? "text" : "password"}
                     required
+                    name="admin_pass_secure_field"
+                    id="admin_pass_secure_field"
+                    autoComplete="new-password"
+                    autoCorrect="off"
+                    autoCapitalize="none"
+                    spellCheck="false"
                     value={loginPassword}
                     onChange={(e) => setLoginPassword(e.target.value)}
                     placeholder="Enter admin password"
@@ -439,37 +498,30 @@ function AdminPage() {
 
               <button
                 type="submit"
-                className="w-full btn-premium py-3.5 text-sm font-semibold flex items-center justify-center gap-2 cursor-pointer mt-2"
+                disabled={lockoutRemaining > 0}
+                className={`w-full py-3.5 text-sm font-semibold flex items-center justify-center gap-2 rounded-xl transition-all mt-2 ${
+                  lockoutRemaining > 0
+                    ? "bg-red-950/60 border border-red-500/50 text-red-300 cursor-not-allowed"
+                    : "btn-premium cursor-pointer"
+                }`}
               >
                 <Key className="w-4 h-4" />
-                <span>Authenticate &amp; Enter Dashboard</span>
+                <span>
+                  {lockoutRemaining > 0
+                    ? `Locked for Security (${lockoutRemaining}s)`
+                    : "Authenticate & Enter Dashboard"}
+                </span>
               </button>
             </form>
 
-            {/* Quick credentials hint & 1-click test button */}
-            <div className="mt-6 pt-5 border-t border-white/10 text-xs text-white/60 space-y-2 relative z-10">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-sand">Default Credentials:</span>
-                <button
-                  type="button"
-                  onClick={handleAutofillDefault}
-                  className="text-[11px] text-sand underline hover:text-white transition-colors cursor-pointer"
-                >
-                  ⚡ One-Click Autofill
-                </button>
+            {/* High-Security Confidential Notice */}
+            <div className="mt-6 pt-5 border-t border-white/10 text-center relative z-10 space-y-2">
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-sand/10 border border-sand/30 text-[11px] text-sand font-medium">
+                <Shield className="w-3.5 h-3.5 text-sand" />
+                <span>Restricted Portal · Multi-Attempt Lockout Active</span>
               </div>
-              <div className="bg-white/[0.03] border border-white/10 rounded-xl p-3 font-mono text-[11px] text-white/80 space-y-1">
-                <div>
-                  <span className="text-white/40">Username: </span>
-                  <span className="text-sand">{getAdminCredentials().username}</span>
-                </div>
-                <div>
-                  <span className="text-white/40">Password: </span>
-                  <span className="text-sand">{getAdminCredentials().password}</span>
-                </div>
-              </div>
-              <p className="text-[10px] text-white/45 text-center">
-                (You can change your username and password anytime in dashboard settings)
+              <p className="text-[11px] text-white/40 max-w-xs mx-auto">
+                Authorized administrators only. Access attempts are protected and credentials are confidential.
               </p>
             </div>
           </div>
@@ -1567,10 +1619,41 @@ function AdminPage() {
 
                 <div>
                   <label className="block text-xs font-semibold text-white/70 uppercase tracking-wider mb-1.5">
+                    Current Password <span className="text-sand">* (Required for security verification)</span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showCurrentPass ? "text" : "password"}
+                      required
+                      autoComplete="current-password"
+                      autoCorrect="off"
+                      autoCapitalize="none"
+                      spellCheck="false"
+                      value={currentPasswordInput}
+                      onChange={(e) => setCurrentPasswordInput(e.target.value)}
+                      placeholder="Enter existing admin password..."
+                      className="w-full rounded-xl bg-white/[0.05] border border-white/15 px-4 pr-11 py-3 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-sand font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowCurrentPass(!showCurrentPass)}
+                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-white/40 hover:text-white transition-colors"
+                    >
+                      {showCurrentPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-white/70 uppercase tracking-wider mb-1.5">
                     New Username (Leave blank to keep current)
                   </label>
                   <input
                     type="text"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="none"
+                    spellCheck="false"
                     value={newUsername}
                     onChange={(e) => setNewUsername(e.target.value)}
                     placeholder="Enter new username..."
@@ -1580,18 +1663,79 @@ function AdminPage() {
 
                 <div>
                   <label className="block text-xs font-semibold text-white/70 uppercase tracking-wider mb-1.5">
-                    New Password
+                    New Strong Password
                   </label>
-                  <input
-                    type="password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Enter new strong password..."
-                    className="w-full rounded-xl bg-white/[0.05] border border-white/15 px-4 py-3 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-sand font-mono"
-                  />
-                  <p className="text-[10px] text-white/40 mt-1">
-                    Minimum 6 characters. We recommend a mix of uppercase, numbers, and symbols.
-                  </p>
+                  <div className="relative">
+                    <input
+                      type={showNewPass ? "text" : "password"}
+                      autoComplete="new-password"
+                      autoCorrect="off"
+                      autoCapitalize="none"
+                      spellCheck="false"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="Enter new strong password..."
+                      className="w-full rounded-xl bg-white/[0.05] border border-white/15 px-4 pr-11 py-3 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-sand font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPass(!showNewPass)}
+                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-white/40 hover:text-white transition-colors"
+                    >
+                      {showNewPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+
+                  {newPassword && (
+                    <div className="mt-2.5 p-3 rounded-xl bg-white/[0.03] border border-white/10 space-y-2">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-white/60">Password Strength:</span>
+                        <span
+                          className={`font-semibold ${
+                            newPassword.length >= 8 &&
+                            /[a-z]/.test(newPassword) &&
+                            /[A-Z]/.test(newPassword) &&
+                            /[0-9]/.test(newPassword) &&
+                            /[^A-Za-z0-9]/.test(newPassword)
+                              ? "text-emerald-400"
+                              : newPassword.length >= 8
+                              ? "text-amber-400"
+                              : "text-red-400"
+                          }`}
+                        >
+                          {newPassword.length >= 8 &&
+                          /[a-z]/.test(newPassword) &&
+                          /[A-Z]/.test(newPassword) &&
+                          /[0-9]/.test(newPassword) &&
+                          /[^A-Za-z0-9]/.test(newPassword)
+                            ? "Ultra Strong 🛡️"
+                            : newPassword.length >= 8
+                            ? "Moderate (Add symbols/uppercase) ⚠️"
+                            : "Weak (Too short) ❌"}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5 text-[10px] text-white/60">
+                        <span className={newPassword.length >= 8 ? "text-emerald-400" : "text-white/40"}>
+                          {newPassword.length >= 8 ? "✓" : "○"} At least 8 characters
+                        </span>
+                        <span
+                          className={
+                            /[a-z]/.test(newPassword) && /[A-Z]/.test(newPassword)
+                              ? "text-emerald-400"
+                              : "text-white/40"
+                          }
+                        >
+                          {/[a-z]/.test(newPassword) && /[A-Z]/.test(newPassword) ? "✓" : "○"} Upper &amp; lowercase
+                        </span>
+                        <span className={/[0-9]/.test(newPassword) ? "text-emerald-400" : "text-white/40"}>
+                          {/[0-9]/.test(newPassword) ? "✓" : "○"} Numbers (0-9)
+                        </span>
+                        <span className={/[^A-Za-z0-9]/.test(newPassword) ? "text-emerald-400" : "text-white/40"}>
+                          {/[^A-Za-z0-9]/.test(newPassword) ? "✓" : "○"} Special symbols (@$!%*#)
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -1605,6 +1749,15 @@ function AdminPage() {
                     placeholder="Confirm new strong password..."
                     className="w-full rounded-xl bg-white/[0.05] border border-white/15 px-4 py-3 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-sand font-mono"
                   />
+                  {confirmPassword && newPassword && (
+                    <p
+                      className={`text-[11px] mt-1 ${
+                        confirmPassword === newPassword ? "text-emerald-400" : "text-red-400"
+                      }`}
+                    >
+                      {confirmPassword === newPassword ? "✓ Passwords match" : "✕ Passwords do not match"}
+                    </p>
+                  )}
                 </div>
 
                 <div className="pt-2">

@@ -10,7 +10,6 @@ import {
   Phone,
   Banknote,
   Compass,
-  Shield,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
@@ -47,7 +46,6 @@ const navLinks = [
   { to: "/menu", label: "Menu" },
   { to: "/gallery", label: "Gallery" },
   { to: "/visit", label: "Contact" },
-  { to: "/admin", label: "Admin Portal" },
 ] as const;
 
 export function SiteHeader() {
@@ -161,14 +159,6 @@ export function SiteHeader() {
             >
               <span>Order / Track Order</span>
             </a>
-            <Link
-              to="/admin"
-              title="Staff & Admin Portal"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border border-sand/40 bg-sand/15 hover:bg-sand hover:text-[#120f0c] text-sand text-xs font-semibold transition-all duration-300 ml-1 shadow-sm"
-            >
-              <Shield className="w-3.5 h-3.5" />
-              <span>Admin</span>
-            </Link>
             <button
               type="button"
               aria-label="Search site"
@@ -185,14 +175,6 @@ export function SiteHeader() {
 
           {/* Mobile hamburger */}
           <div className="flex items-center gap-2 md:hidden">
-            <Link
-              to="/admin"
-              aria-label="Admin Portal"
-              title="Admin Portal"
-              className="w-9 h-9 rounded-full border border-sand/40 bg-sand/15 flex items-center justify-center text-sand hover:bg-sand hover:text-[#120f0c] active:scale-95 transition-all"
-            >
-              <Shield className="w-4 h-4" />
-            </Link>
             <a
               href={phoneHref}
               aria-label={`Call ${phone}`}
@@ -322,14 +304,6 @@ export function SiteHeader() {
             >
               Order / Track &amp; Cancel Order
             </a>
-            <Link
-              to="/admin"
-              onClick={() => setOpen(false)}
-              className="w-full py-3 rounded-2xl bg-sand/15 border border-sand/40 text-sand hover:bg-sand hover:text-[#120f0c] text-xs font-semibold flex items-center justify-center gap-2 transition-all"
-            >
-              <Shield className="w-4 h-4" />
-              <span>Admin Portal Login</span>
-            </Link>
           </div>
         </div>
       </div>
@@ -507,14 +481,6 @@ export function SiteFooter() {
               © {new Date().getFullYear()} {cafeName} · 225 Lavender Hill, London SW11 1JR. All rights
               reserved.
             </p>
-            <Link
-              to="/admin"
-              className="text-[11px] text-sand/75 hover:text-sand underline-offset-4 hover:underline transition-colors flex items-center gap-1.5"
-              title="Protected Staff and Admin Portal"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-sand animate-pulse" />
-              <span>Admin Portal Login</span>
-            </Link>
           </div>
           <div className="flex items-center gap-2.5">
             <a

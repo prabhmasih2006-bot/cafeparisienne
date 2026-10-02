@@ -56,14 +56,20 @@ export interface AdminCredentials {
 // Storage Keys
 const KEY_CREDENTIALS = "cafe_admin_credentials";
 const KEY_SESSION = "cafe_admin_session";
+const KEY_LOGIN_FAILURES = "cafe_admin_login_failures";
+const KEY_LOCKOUT_TIMESTAMP = "cafe_admin_lockout_ts";
 const KEY_FORM_SUBMISSIONS = "cafe_admin_form_submissions";
 const KEY_WHATSAPP_CLICKS = "cafe_admin_whatsapp_clicks";
 const KEY_PAGE_VIEWS = "cafe_admin_page_views";
 const KEY_VISITOR_ID = "cafe_visitor_id";
 
-// Strong Default Credentials
-export const DEFAULT_ADMIN_USERNAME = "admin_parisienne";
-export const DEFAULT_ADMIN_PASSWORD = "Admin@Paris2026#Secure";
+// Strong Default Credentials (can also be configured via VITE_ADMIN_USERNAME / VITE_ADMIN_PASSWORD)
+export const DEFAULT_ADMIN_USERNAME =
+  (typeof import.meta !== "undefined" && import.meta.env?.VITE_ADMIN_USERNAME) ||
+  "admin_parisienne";
+export const DEFAULT_ADMIN_PASSWORD =
+  (typeof import.meta !== "undefined" && import.meta.env?.VITE_ADMIN_PASSWORD) ||
+  "Parisienne#Admin2026!Secure";
 
 // Clean Defaults (Zero Records)
 const INITIAL_SUBMISSIONS: FormSubmission[] = [];
@@ -268,19 +274,83 @@ export function getAdminCredentials(): { username: string; password: string } {
   }
 }
 
+// Lockout & Brute-Force Rate Limiting
+export function getAdminLockoutStatus(): { isLocked: boolean; remainingSeconds: number } {
+  if (typeof window === "undefined") return { isLocked: false, remainingSeconds: 0 };
+  try {
+    const rawLockout = localStorage.getItem(KEY_LOCKOUT_TIMESTAMP);
+    if (!rawLockout) return { isLocked: false, remainingSeconds: 0 };
+    const lockoutUntil = parseInt(rawLockout, 10);
+    const now = Date.now();
+    if (now < lockoutUntil) {
+      const remainingSeconds = Math.ceil((lockoutUntil - now) / 1000);
+      return { isLocked: true, remainingSeconds };
+    }
+    // Lockout period expired, clean up
+    localStorage.removeItem(KEY_LOCKOUT_TIMESTAMP);
+    localStorage.removeItem(KEY_LOGIN_FAILURES);
+    return { isLocked: false, remainingSeconds: 0 };
+  } catch {
+    return { isLocked: false, remainingSeconds: 0 };
+  }
+}
+
+export function recordFailedLoginAttempt(): {
+  isLocked: boolean;
+  remainingSeconds: number;
+  attemptsLeft: number;
+} {
+  if (typeof window === "undefined") return { isLocked: false, remainingSeconds: 0, attemptsLeft: 5 };
+  try {
+    const currentFailures = parseInt(localStorage.getItem(KEY_LOGIN_FAILURES) || "0", 10) + 1;
+    localStorage.setItem(KEY_LOGIN_FAILURES, currentFailures.toString());
+
+    if (currentFailures >= 5) {
+      const lockoutDurationMs = 60 * 1000; // 60 seconds lockout
+      const lockoutUntil = Date.now() + lockoutDurationMs;
+      localStorage.setItem(KEY_LOCKOUT_TIMESTAMP, lockoutUntil.toString());
+      return { isLocked: true, remainingSeconds: 60, attemptsLeft: 0 };
+    }
+    return { isLocked: false, remainingSeconds: 0, attemptsLeft: Math.max(0, 5 - currentFailures) };
+  } catch {
+    return { isLocked: false, remainingSeconds: 0, attemptsLeft: 5 };
+  }
+}
+
+export function clearFailedLoginAttempts() {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(KEY_LOGIN_FAILURES);
+    localStorage.removeItem(KEY_LOCKOUT_TIMESTAMP);
+  } catch {}
+}
+
 export function updateAdminCredentials(
   newUsername: string,
-  newPassword: string
+  newPassword: string,
+  currentPasswordVerification?: string
 ): { success: boolean; message: string } {
   if (typeof window === "undefined") return { success: false, message: "Server environment" };
+  const current = getAdminCredentials();
+
+  if (currentPasswordVerification !== undefined && currentPasswordVerification !== current.password) {
+    return {
+      success: false,
+      message: "Current password verification failed. Please enter your correct existing password.",
+    };
+  }
+
   const trimmedUser = newUsername.trim();
   const trimmedPass = newPassword.trim();
 
   if (trimmedUser.length < 3) {
     return { success: false, message: "Username must be at least 3 characters long." };
   }
-  if (trimmedPass.length < 6) {
-    return { success: false, message: "Password must be at least 6 characters long." };
+  if (trimmedPass.length < 8) {
+    return {
+      success: false,
+      message: "Strong password required: Password must be at least 8 characters long.",
+    };
   }
 
   try {
@@ -302,7 +372,7 @@ export function updateAdminCredentials(
       );
     }
     notifyAdminUpdate();
-    return { success: true, message: "Admin credentials updated successfully!" };
+    return { success: true, message: "Admin credentials successfully updated!" };
   } catch (e) {
     return { success: false, message: "Failed to save credentials: " + String(e) };
   }
@@ -328,8 +398,21 @@ export function isAdminAuthenticated(): boolean {
   }
 }
 
-export function adminLogin(user: string, pass: string): { success: boolean; message: string } {
+export function adminLogin(
+  user: string,
+  pass: string
+): { success: boolean; message: string; remainingSeconds?: number } {
+  const lockout = getAdminLockoutStatus();
+  if (lockout.isLocked) {
+    return {
+      success: false,
+      message: `Security Lockout: Too many failed login attempts. Please wait ${lockout.remainingSeconds} seconds before trying again.`,
+      remainingSeconds: lockout.remainingSeconds,
+    };
+  }
+
   if (verifyAdminCredentials(user, pass)) {
+    clearFailedLoginAttempts();
     const sessionData = {
       token: "tok_" + Math.random().toString(36).substring(2) + Date.now(),
       username: user.trim(),
@@ -339,7 +422,22 @@ export function adminLogin(user: string, pass: string): { success: boolean; mess
     notifyAdminUpdate();
     return { success: true, message: "Login successful!" };
   }
-  return { success: false, message: "Invalid username or password. Please try again." };
+
+  const failure = recordFailedLoginAttempt();
+  if (failure.isLocked) {
+    return {
+      success: false,
+      message: `Security Lockout: Too many failed attempts! Access locked for 60 seconds to protect the admin portal.`,
+      remainingSeconds: 60,
+    };
+  }
+
+  return {
+    success: false,
+    message: `Invalid username or password. (${failure.attemptsLeft} attempt${
+      failure.attemptsLeft === 1 ? "" : "s"
+    } remaining before temporary security lock)`,
+  };
 }
 
 export function adminLogout() {
@@ -751,13 +849,10 @@ export function wipeAllDataToZero() {
   notifyAdminUpdate();
 }
 
-// Reset all store data back to sample demo (if explicitly requested by admin)
+// Reset all store data back to sample demo (keeps custom admin credentials intact)
 export function resetAdminDataToDefault() {
   if (typeof window === "undefined") return;
-  localStorage.setItem(KEY_CREDENTIALS, JSON.stringify({
-    username: DEFAULT_ADMIN_USERNAME,
-    password: DEFAULT_ADMIN_PASSWORD,
-  }));
+  // NOTE: Never reset custom admin credentials so the administrator's secure password is kept intact
   localStorage.setItem(KEY_FORM_SUBMISSIONS, JSON.stringify(SAMPLE_DEMO_SUBMISSIONS));
   localStorage.setItem(KEY_WHATSAPP_CLICKS, JSON.stringify(SAMPLE_DEMO_WHATSAPP_CLICKS));
   localStorage.setItem(KEY_PAGE_VIEWS, JSON.stringify(SAMPLE_DEMO_PAGE_VIEWS));
